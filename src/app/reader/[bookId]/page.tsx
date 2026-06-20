@@ -155,7 +155,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
 
   // Calculate scaled dimensions based on container width
   const isMobile = containerWidth < 768;
-  const fitWidth = isMobile ? (containerWidth - 24) : Math.min(containerWidth - 48, 850);
+  const fitWidth = Math.max(isMobile ? (containerWidth - 24) : Math.min(containerWidth - 48, 850), 320);
   const pageWidth = fitWidth * zoomScale;
   const pageHeight = aspectRatio ? pageWidth * aspectRatio : pageWidth * 1.414; // Default to A4 ratio
 
@@ -166,7 +166,6 @@ const PageSlot: React.FC<PageSlotProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     strokes.forEach((stroke) => {
@@ -557,12 +556,18 @@ export default function ReaderPage() {
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width || container.clientWidth);
+        const w = entry.contentRect.width || container.clientWidth;
+        if (w > 0) {
+          setContainerWidth(w);
+        }
       }
     });
 
     observer.observe(container);
-    setContainerWidth(container.clientWidth || 800);
+    const initialWidth = container.clientWidth;
+    if (initialWidth > 0) {
+      setContainerWidth(initialWidth);
+    }
 
     return () => observer.disconnect();
   }, [scrollContainerRef, pdfLoading]);
@@ -1612,7 +1617,7 @@ export default function ReaderPage() {
         {/* DYNAMIC SCROLL CONTAINER: RENDERING ALL PAGES CONTINUOUSLY */}
         <div 
           ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto p-6 space-y-8 relative bg-surface-variant/15 flex flex-col select-text"
+          className="flex-1 overflow-y-auto p-6 space-y-8 relative bg-surface-variant/15 flex flex-col items-center select-text"
           onScroll={() => {
             if (!scrollContainerRef.current || !pdfDoc) return;
             const container = scrollContainerRef.current;
