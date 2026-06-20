@@ -73,7 +73,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         .from('subscriptions')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (subError && subError.code !== 'PGRST116') {
         // PGRST116 is code for "no rows returned", which is fine for new users without subscriptions

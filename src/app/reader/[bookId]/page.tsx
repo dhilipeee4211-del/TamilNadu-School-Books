@@ -80,6 +80,7 @@ interface PageSlotProps {
   pageNum: number;
   pdfDoc: pdfjs.PDFDocumentProxy;
   zoomScale: number;
+  containerWidth: number;
   theme: 'light' | 'dark' | 'sepia';
   isPenActive: boolean;
   penColor: string;
@@ -94,12 +95,14 @@ interface PageSlotProps {
     pageNum: number
   ) => void;
   onPageIntersect: (pageNum: number) => void;
+  onPageDoubleClick: () => void;
 }
 
 const PageSlot: React.FC<PageSlotProps> = ({
   pageNum,
   pdfDoc,
   zoomScale,
+  containerWidth,
   theme,
   isPenActive,
   penColor,
@@ -108,7 +111,8 @@ const PageSlot: React.FC<PageSlotProps> = ({
   pageDrawings,
   onSaveDrawing,
   onTextSelected,
-  onPageIntersect
+  onPageIntersect,
+  onPageDoubleClick
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -117,7 +121,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
 
   const [isVisible, setIsVisible] = useState(false);
   const [rendering, setRendering] = useState(false);
-  const [dimensions, setDimensions] = useState({ width: 595, height: 842 }); // Standard A4 default
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
   const [strokes, setStrokes] = useState<Stroke[]>(pageDrawings);
   const [isDrawing, setIsDrawing] = useState(false);
 
@@ -128,12 +132,41 @@ const PageSlot: React.FC<PageSlotProps> = ({
     setStrokes(pageDrawings || []);
   }, [pageDrawings]);
 
+  // Load aspect ratio as soon as pdfDoc is available to prevent layout shifts
+  useEffect(() => {
+    if (!pdfDoc) return;
+    let active = true;
+    const fetchPageInfo = async () => {
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1.0 });
+        if (active) {
+          setAspectRatio(viewport.height / viewport.width);
+        }
+      } catch (err) {
+        console.error('Failed to get page size for page ', pageNum, err);
+      }
+    };
+    fetchPageInfo();
+    return () => {
+      active = false;
+    };
+  }, [pdfDoc, pageNum]);
+
+  // Calculate scaled dimensions based on container width
+  const isMobile = containerWidth < 768;
+  const fitWidth = isMobile ? (containerWidth - 24) : Math.min(containerWidth - 48, 850);
+  const pageWidth = fitWidth * zoomScale;
+  const pageHeight = aspectRatio ? pageWidth * aspectRatio : pageWidth * 1.414; // Default to A4 ratio
+
   // Redraw pencil strokes on size adjustment
   useEffect(() => {
     const canvas = drawCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
+    const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     strokes.forEach((stroke) => {
@@ -145,14 +178,14 @@ const PageSlot: React.FC<PageSlotProps> = ({
       ctx.lineJoin = 'round';
 
       const first = stroke.points[0];
-      ctx.moveTo((first.x / 100) * canvas.width, (first.y / 100) * canvas.height);
+      ctx.moveTo((first.x / 100) * pageWidth, (first.y / 100) * pageHeight);
       for (let i = 1; i < stroke.points.length; i++) {
         const pt = stroke.points[i];
-        ctx.lineTo((pt.x / 100) * canvas.width, (pt.y / 100) * canvas.height);
+        ctx.lineTo((pt.x / 100) * pageWidth, (pt.y / 100) * pageHeight);
       }
       ctx.stroke();
     });
-  }, [strokes, dimensions, zoomScale]);
+  }, [strokes, pageWidth, pageHeight, zoomScale]);
 
   // Observer to lazily load page slot content
   useEffect(() => {
@@ -170,7 +203,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
           }
         });
       },
-      { rootMargin: '400px 0px 400px 0px', threshold: 0.15 }
+      { rootMargin: '600px 0px 600px 0px', threshold: 0.1 }
     );
 
     observer.observe(container);
@@ -186,18 +219,24 @@ const PageSlot: React.FC<PageSlotProps> = ({
       try {
         setRendering(true);
         const page = await pdfDoc.getPage(pageNum);
-        const viewport = page.getViewport({ scale: zoomScale });
+        const baseViewport = page.getViewport({ scale: 1.0 });
+        const calculatedScale = pageWidth / baseViewport.width;
+        const viewport = page.getViewport({ scale: calculatedScale });
 
         if (!active) return;
-        setDimensions({ width: viewport.width, height: viewport.height });
 
-        // Setup rendering canvas
+        // Setup rendering canvas with High-DPI support
         const canvas = canvasRef.current;
         if (canvas) {
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = pageWidth * dpr;
+          canvas.height = pageHeight * dpr;
+          canvas.style.width = `${pageWidth}px`;
+          canvas.style.height = `${pageHeight}px`;
+          
           const context = canvas.getContext('2d');
           if (context) {
+            context.scale(dpr, dpr);
             await page.render({
               canvasContext: context,
               viewport: viewport,
@@ -210,8 +249,8 @@ const PageSlot: React.FC<PageSlotProps> = ({
         if (textLayerRef.current) {
           const textLayerDiv = textLayerRef.current;
           textLayerDiv.innerHTML = '';
-          textLayerDiv.style.width = `${viewport.width}px`;
-          textLayerDiv.style.height = `${viewport.height}px`;
+          textLayerDiv.style.width = `${pageWidth}px`;
+          textLayerDiv.style.height = `${pageHeight}px`;
 
           const textContent = await page.getTextContent();
           const textLayer = new pdfjs.TextLayer({
@@ -222,11 +261,19 @@ const PageSlot: React.FC<PageSlotProps> = ({
           await textLayer.render();
         }
 
-        // Setup draw canvas dimensions
+        // Setup draw canvas dimensions with High-DPI support
         const drawCanvas = drawCanvasRef.current;
         if (drawCanvas) {
-          drawCanvas.width = viewport.width;
-          drawCanvas.height = viewport.height;
+          const dpr = window.devicePixelRatio || 1;
+          drawCanvas.width = pageWidth * dpr;
+          drawCanvas.height = pageHeight * dpr;
+          drawCanvas.style.width = `${pageWidth}px`;
+          drawCanvas.style.height = `${pageHeight}px`;
+          
+          const drawCtx = drawCanvas.getContext('2d');
+          if (drawCtx) {
+            drawCtx.scale(dpr, dpr);
+          }
         }
 
         setRendering(false);
@@ -240,7 +287,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
     return () => {
       active = false;
     };
-  }, [isVisible, pdfDoc, pageNum, zoomScale]);
+  }, [isVisible, pdfDoc, pageNum, pageWidth, pageHeight]);
 
   // Selection handler for dynamic text markup popup
   const handleTextSelection = () => {
@@ -338,8 +385,8 @@ const PageSlot: React.FC<PageSlotProps> = ({
       ctx.lineJoin = 'round';
 
       const prev = currentPoints[currentPoints.length - 2];
-      ctx.moveTo((prev.x / 100) * canvas.width, (prev.y / 100) * canvas.height);
-      ctx.lineTo((x / 100) * canvas.width, (y / 100) * canvas.height);
+      ctx.moveTo((prev.x / 100) * pageWidth, (prev.y / 100) * pageHeight);
+      ctx.lineTo((x / 100) * pageWidth, (y / 100) * pageHeight);
       ctx.stroke();
     }
   };
@@ -366,12 +413,13 @@ const PageSlot: React.FC<PageSlotProps> = ({
       ref={containerRef}
       className="relative bg-white shadow-md mx-auto select-text border border-outline-variant/35"
       style={{
-        width: `${dimensions.width}px`,
-        height: `${dimensions.height}px`,
+        width: `${pageWidth}px`,
+        height: `${pageHeight}px`,
         ...getThemeFilterStyle()
       }}
       onMouseUp={handleTextSelection}
       onTouchEnd={handleTextSelection}
+      onDoubleClick={onPageDoubleClick}
     >
       {!isVisible && (
         <div className="absolute inset-0 flex items-center justify-center bg-surface-variant/15 text-xs text-on-surface-variant font-medium">
@@ -385,8 +433,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
           
           <div 
             ref={textLayerRef} 
-            className="textLayer absolute inset-0 z-10 opacity-35 select-text pointer-events-auto" 
-            style={{ mixBlendMode: 'multiply' }}
+            className="textLayer absolute inset-0 z-10 pointer-events-auto" 
           />
 
           {/* highlights and markup layer */}
@@ -444,6 +491,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
   );
 };
 
+
 export default function ReaderPage() {
   const { bookId } = useParams() as { bookId: string };
   const { user, isPremium, loading } = useAuth();
@@ -467,9 +515,10 @@ export default function ReaderPage() {
 
   // Active toolbar parameters
   const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'sepia'>('light');
-  const [activeTool, setActiveTool] = useState<'pan' | 'pen'>('pan');
+  const [activeTool, setActiveTool] = useState<'pan' | 'pen' | 'highlight' | 'underline' | 'strikeout'>('pan');
   const [activePenColor, setActivePenColor] = useState('#ff0000');
   const [activePenWidth, setActivePenWidth] = useState(3);
+  const [containerWidth, setContainerWidth] = useState(800);
 
   // Interactive reader states
   const [highlights, setHighlights] = useState<Highlight[]>([]);
@@ -501,6 +550,22 @@ export default function ReaderPage() {
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width || container.clientWidth);
+      }
+    });
+
+    observer.observe(container);
+    setContainerWidth(container.clientWidth || 800);
+
+    return () => observer.disconnect();
+  }, [scrollContainerRef, pdfLoading]);
 
   const colors = [
     { name: 'Yellow', hex: '#fbbf24' },
@@ -765,7 +830,7 @@ export default function ReaderPage() {
       } else {
         const { data } = await supabase
           .from('reading_progress')
-          .upsert(payload)
+          .upsert(payload, { onConflict: 'user_id,book_id' })
           .select()
           .single();
         if (data) {
@@ -786,6 +851,67 @@ export default function ReaderPage() {
   const handlePrevPage = () => {
     if (currentPage > 1) {
       scrollToPage(currentPage - 1);
+    }
+  };
+
+  const handlePageDoubleClick = () => {
+    setZoomScale((prev) => (prev > 1.25 ? 1.0 : 1.6));
+  };
+
+  const handleTextSelected = async (
+    rects: Array<{ left: number; top: number; width: number; height: number }>,
+    text: string,
+    pos: { x: number; y: number },
+    pageNum: number
+  ) => {
+    if (!user || !book) return;
+
+    if (activeTool === 'highlight' || activeTool === 'underline' || activeTool === 'strikeout') {
+      let finalColor = selectedHighlightColor;
+      if (activeTool === 'underline') {
+        finalColor = `underline:${selectedHighlightColor}`;
+      } else if (activeTool === 'strikeout') {
+        finalColor = `strikeout:${selectedHighlightColor}`;
+      }
+
+      try {
+        const payload = {
+          user_id: user.id,
+          book_id: book.id,
+          page_number: pageNum,
+          rects,
+          text,
+          color: finalColor,
+          notes: null
+        };
+
+        const { data, error } = await supabase
+          .from('highlights')
+          .insert(payload)
+          .select()
+          .single();
+
+        if (error) {
+          console.error(error.message);
+        } else if (data) {
+          setHighlights((prev) => [...prev, data as Highlight]);
+          if (typeof window !== 'undefined') {
+            window.getSelection()?.removeAllRanges();
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      setActiveSelection({
+        rects,
+        text,
+        position: {
+          x: pos.x,
+          y: pos.y + (document.getElementById(`page-slot-${pageNum}`)?.offsetTop || 0)
+        },
+        pageNum
+      });
     }
   };
 
@@ -870,7 +996,7 @@ export default function ReaderPage() {
           page_number: pageNum,
           strokes: strokes,
           updated_at: new Date().toISOString()
-        });
+        }, { onConflict: 'user_id,book_id,page_number' });
     } catch (err) {
       console.error('Failed to sync drawings:', err);
     }
@@ -1033,7 +1159,20 @@ export default function ReaderPage() {
             >
               <ZoomOut size={14} />
             </button>
-            <span className="font-bold px-1.5 min-w-[45px] text-center">{Math.round(zoomScale * 100)}%</span>
+            <select
+              value={zoomScale}
+              onChange={(e) => setZoomScale(parseFloat(e.target.value))}
+              className="font-bold bg-transparent text-center focus:outline-none border-none text-on-surface-variant cursor-pointer text-xs pr-1"
+            >
+              <option value="0.6">60%</option>
+              <option value="0.8">80%</option>
+              <option value="1.0">Fit (100%)</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+              <option value="1.75">175%</option>
+              <option value="2.0">200%</option>
+              <option value="2.5">250%</option>
+            </select>
             <button 
               onClick={() => setZoomScale(Math.min(2.5, zoomScale + 0.15))}
               className="p-1 hover:bg-surface rounded text-on-surface-variant"
@@ -1120,78 +1259,133 @@ export default function ReaderPage() {
       </header>
 
       {/* 2. DEDICATED XODO TOOLBAR (Pen/Pan tools, Theme picker) */}
-      <div className="h-11 border-b border-outline-variant/60 bg-surface/95 px-4 flex items-center justify-between z-30 flex-shrink-0 text-xs">
+      <div className="h-11 md:h-12 border-b border-outline-variant/60 bg-surface/95 px-4 flex items-center justify-between z-30 flex-shrink-0 text-xs overflow-x-auto gap-2">
         
         {/* Tool modes toggle */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={() => setActiveTool('pan')}
-            className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
+            className={`px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
               activeTool === 'pan' 
                 ? 'bg-primary text-on-primary border-primary shadow-sm' 
                 : 'hover:bg-surface-variant/30 border-outline-variant text-on-surface-variant'
             }`}
+            title="Pan & Select text tool"
           >
-            <Hand size={14} /> Pan / Select
+            <Hand size={14} /> <span className="hidden sm:inline">Pan</span>
           </button>
           
           <button
             onClick={() => setActiveTool('pen')}
-            className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
+            className={`px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
               activeTool === 'pen' 
                 ? 'bg-primary text-on-primary border-primary shadow-sm' 
                 : 'hover:bg-surface-variant/30 border-outline-variant text-on-surface-variant'
             }`}
+            title="Freehand drawing pencil"
           >
-            <Pencil size={14} /> Pencil Draw
+            <Pencil size={14} /> <span className="hidden sm:inline">Draw</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTool('highlight')}
+            className={`px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
+              activeTool === 'highlight' 
+                ? 'bg-primary text-on-primary border-primary shadow-sm' 
+                : 'hover:bg-surface-variant/30 border-outline-variant text-on-surface-variant'
+            }`}
+            title="Text highlighting tool"
+          >
+            <Highlighter size={14} /> <span className="hidden sm:inline">Highlight</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTool('underline')}
+            className={`px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
+              activeTool === 'underline' 
+                ? 'bg-primary text-on-primary border-primary shadow-sm' 
+                : 'hover:bg-surface-variant/30 border-outline-variant text-on-surface-variant'
+            }`}
+            title="Underline text tool"
+          >
+            <span className="font-extrabold underline decoration-2 text-xs">U</span> <span className="hidden sm:inline">Underline</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTool('strikeout')}
+            className={`px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all border ${
+              activeTool === 'strikeout' 
+                ? 'bg-primary text-on-primary border-primary shadow-sm' 
+                : 'hover:bg-surface-variant/30 border-outline-variant text-on-surface-variant'
+            }`}
+            title="Strikeout text tool"
+          >
+            <span className="font-extrabold line-through decoration-2 text-xs">S</span> <span className="hidden sm:inline">Strikeout</span>
           </button>
         </div>
 
-        {/* Pencil config customization */}
-        {activeTool === 'pen' && (
-          <div className="flex items-center gap-3 animate-fade-in border-l border-outline-variant/50 pl-3">
-            
-            {/* Stroke Colors */}
-            <div className="flex items-center gap-1">
-              {['#ef4444', '#3b82f6', '#10b981', '#fbbf24', '#000000'].map((color) => (
-                <button
-                  key={color}
-                  onClick={() => setActivePenColor(color)}
-                  className={`w-4 h-4 rounded-full border transition-transform ${
-                    activePenColor === color ? 'scale-125 border-primary shadow-sm ring-1 ring-primary/20' : 'border-outline-variant/40 hover:scale-110'
-                  }`}
-                  style={{ backgroundColor: color }}
-                />
-              ))}
+        {/* Config customization based on active tool */}
+        <div className="flex items-center gap-3 flex-shrink-0 border-l border-outline-variant/40 pl-3">
+          {activeTool === 'pen' ? (
+            <div className="flex items-center gap-3 animate-fade-in">
+              {/* Stroke Colors */}
+              <div className="flex items-center gap-1">
+                {['#ef4444', '#3b82f6', '#10b981', '#fbbf24', '#000000'].map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setActivePenColor(color)}
+                    className={`w-4 h-4 rounded-full border transition-transform ${
+                      activePenColor === color ? 'scale-125 border-primary shadow-sm ring-1 ring-primary/20' : 'border-outline-variant/40 hover:scale-110'
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+
+              {/* Stroke Widths */}
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <span className="font-semibold text-on-surface-variant">Size:</span>
+                {[2, 4, 6].map((width) => (
+                  <button
+                    key={width}
+                    onClick={() => setActivePenWidth(width)}
+                    className={`px-2 py-0.5 rounded border font-bold ${
+                      activePenWidth === width ? 'bg-primary/10 text-primary border-primary/20' : 'border-outline-variant/40 hover:bg-surface-variant/20'
+                    }`}
+                  >
+                    {width}px
+                  </button>
+                ))}
+              </div>
+
+              {/* Eraser button for current page */}
+              <button
+                onClick={() => handleClearDrawing(currentPage)}
+                className="p-1 hover:bg-red-500/10 text-red-500 rounded-lg border border-red-500/20 hover:border-red-500/35 transition-all flex items-center gap-1 text-[10px] font-bold"
+                title="Clear draws on page"
+              >
+                <Eraser size={12} /> Clear Page
+              </button>
             </div>
-
-            {/* Stroke Widths */}
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="font-semibold text-on-surface-variant">Size:</span>
-              {[2, 4, 6].map((width) => (
-                <button
-                  key={width}
-                  onClick={() => setActivePenWidth(width)}
-                  className={`px-2 py-0.5 rounded border font-bold ${
-                    activePenWidth === width ? 'bg-primary/10 text-primary border-primary/20' : 'border-outline-variant/40 hover:bg-surface-variant/20'
-                  }`}
-                >
-                  {width}px
-                </button>
-              ))}
+          ) : (activeTool === 'highlight' || activeTool === 'underline' || activeTool === 'strikeout') ? (
+            <div className="flex items-center gap-2 animate-fade-in">
+              <span className="font-semibold text-[10px] text-on-surface-variant">Color:</span>
+              <div className="flex items-center gap-1">
+                {colors.map((c) => (
+                  <button
+                    key={c.hex}
+                    onClick={() => setSelectedHighlightColor(c.hex)}
+                    className={`w-4.5 h-4.5 rounded-full border transition-transform ${
+                      selectedHighlightColor === c.hex ? 'scale-125 border-primary shadow-sm ring-1 ring-primary/30' : 'border-outline-variant/40 hover:scale-110'
+                    }`}
+                    style={{ backgroundColor: c.hex }}
+                    title={c.name}
+                  />
+                ))}
+              </div>
             </div>
-
-            {/* Eraser button for current page */}
-            <button
-              onClick={() => handleClearDrawing(currentPage)}
-              className="p-1 hover:bg-red-500/10 text-red-500 rounded-lg border border-red-500/20 hover:border-red-500/35 transition-all flex items-center gap-1 text-[10px] font-bold"
-              title="Clear draws on page"
-            >
-              <Eraser size={12} /> Clear Page
-            </button>
-
-          </div>
-        )}
+          ) : null}
+        </div>
 
         {/* Reader Theme switcher selector */}
         <div className="flex items-center gap-1 border border-outline-variant/60 rounded-xl p-0.5 bg-surface-variant/10">
@@ -1462,6 +1656,7 @@ export default function ReaderPage() {
                 pageNum={pNum}
                 pdfDoc={pdfDoc}
                 zoomScale={zoomScale}
+                containerWidth={containerWidth}
                 theme={themeMode}
                 isPenActive={activeTool === 'pen'}
                 penColor={activePenColor}
@@ -1475,17 +1670,8 @@ export default function ReaderPage() {
                     syncReadingProgress(pageNum);
                   }
                 }}
-                onTextSelected={(rects, text, pos, pageNum) => {
-                  setActiveSelection({
-                    rects,
-                    text,
-                    position: {
-                      x: pos.x,
-                      y: pos.y + (document.getElementById(`page-slot-${pageNum}`)?.offsetTop || 0)
-                    },
-                    pageNum
-                  });
-                }}
+                onTextSelected={handleTextSelected}
+                onPageDoubleClick={handlePageDoubleClick}
               />
             );
           })}
