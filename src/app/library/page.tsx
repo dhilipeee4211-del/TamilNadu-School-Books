@@ -82,7 +82,10 @@ function LibraryContent() {
       
       const map: Record<string, boolean> = {};
       booksList.forEach(book => {
-        map[book.id] = cachedUrls.some(url => url.includes(book.pdf_url) || book.pdf_url.includes(url));
+        map[book.id] = cachedUrls.some(url => {
+          const decoded = decodeURIComponent(url);
+          return url.includes(book.pdf_url) || book.pdf_url.includes(url) || decoded.includes(book.pdf_url);
+        });
       });
       setDownloadedBooksMap(map);
     } catch (err) {
@@ -131,8 +134,9 @@ function LibraryContent() {
     try {
       setDownloadProgress(prev => ({ ...prev, [book.id]: 0 }));
 
-      // Fetch the file with progress
-      const response = await fetch(book.pdf_url);
+      // Fetch the file through the server-side CORS proxy
+      const proxyUrl = `/api/pdf-proxy?url=${encodeURIComponent(book.pdf_url)}`;
+      const response = await fetch(proxyUrl);
       if (!response.ok) throw new Error('Network response was not ok');
       
       const reader = response.body?.getReader();
@@ -152,14 +156,14 @@ function LibraryContent() {
         }
       }
 
-      // Consolidate fragments and write to cache
+      // Consolidate fragments and write to cache under the proxy URL
       const blob = new Blob(chunks);
       const cacheResponse = new Response(blob, {
         headers: response.headers
       });
 
       const cache = await caches.open('tn-school-book-pdf-cache-v1');
-      await cache.put(book.pdf_url, cacheResponse);
+      await cache.put(proxyUrl, cacheResponse);
 
       setDownloadedBooksMap(prev => ({ ...prev, [book.id]: true }));
       alert(`"${book.title}" is now available offline!`);
@@ -184,7 +188,8 @@ function LibraryContent() {
       const keys = await cache.keys();
       let deleted = false;
       for (const req of keys) {
-        if (req.url.includes(book.pdf_url) || book.pdf_url.includes(req.url)) {
+        const decoded = decodeURIComponent(req.url);
+        if (req.url.includes(book.pdf_url) || book.pdf_url.includes(req.url) || decoded.includes(book.pdf_url)) {
           await cache.delete(req);
           deleted = true;
         }

@@ -105,6 +105,7 @@ export default function ReaderPage() {
   // Cache download progress tracking states
   const [isCachedOffline, setIsCachedOffline] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
@@ -163,7 +164,10 @@ export default function ReaderPage() {
     try {
       const cache = await caches.open('tn-school-book-pdf-cache-v1');
       const keys = await cache.keys();
-      const cached = keys.some(req => req.url.includes(url) || url.includes(req.url));
+      const cached = keys.some(req => {
+        const decoded = decodeURIComponent(req.url);
+        return req.url.includes(url) || url.includes(req.url) || decoded.includes(url);
+      });
       setIsCachedOffline(cached);
     } catch (err) {
       console.error(err);
@@ -177,7 +181,8 @@ export default function ReaderPage() {
     try {
       setDownloadPercent(0);
 
-      const response = await fetch(book.pdf_url);
+      const proxyUrl = `/api/pdf-proxy?url=${encodeURIComponent(book.pdf_url)}`;
+      const response = await fetch(proxyUrl);
       if (!response.ok) throw new Error('Response was not ok');
 
       const reader = response.body?.getReader();
@@ -203,7 +208,7 @@ export default function ReaderPage() {
       });
 
       const cache = await caches.open('tn-school-book-pdf-cache-v1');
-      await cache.put(book.pdf_url, cacheResponse);
+      await cache.put(proxyUrl, cacheResponse);
 
       setIsCachedOffline(true);
       alert('Book saved for offline use!');
@@ -285,10 +290,14 @@ export default function ReaderPage() {
     const loadPdfDoc = async () => {
       try {
         setPdfLoading(true);
+        setPdfError(null);
+        
+        // Use proxy URL to bypass potential CORS restrictions
+        const proxyUrl = `/api/pdf-proxy?url=${encodeURIComponent(book.pdf_url)}`;
         
         // pdfjs loading
         const loadingTask = pdfjs.getDocument({
-          url: book.pdf_url,
+          url: proxyUrl,
           withCredentials: false
         });
 
@@ -299,8 +308,10 @@ export default function ReaderPage() {
 
         // Warm up text cache in background for search engine capability
         cachePdfText(doc);
-      } catch (err) {
+      } catch (err: unknown) {
         console.error('Failed to render PDF document:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        setPdfError(msg);
         setPdfLoading(false);
       }
     };
@@ -602,6 +613,30 @@ export default function ReaderPage() {
     setSearchResults(results);
     setIsSearching(false);
   };
+
+  if (pdfError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-4 p-6 bg-surface border border-outline-variant rounded-3xl max-w-md mx-auto text-center animate-fade-in">
+        <div className="w-12 h-12 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-2">
+          <X className="w-6 h-6" />
+        </div>
+        <h3 className="font-extrabold text-foreground text-md">Failed to Load PDF</h3>
+        <p className="text-xs text-on-surface-variant leading-relaxed">
+          There was a problem loading the curriculum PDF document. Error: <span className="font-mono text-[10px] text-red-500 block mt-1 p-2 bg-red-500/5 rounded border border-red-500/10">{pdfError}</span>
+        </p>
+        <button
+          onClick={() => {
+            setPdfError(null);
+            setPdfLoading(true);
+            router.refresh();
+          }}
+          className="mt-2 px-4 py-2 bg-primary text-on-primary text-xs font-bold rounded-xl hover:bg-primary/95 transition-all shadow-sm"
+        >
+          Retry Loading
+        </button>
+      </div>
+    );
+  }
 
   if (loading || pdfLoading || !book) {
     return (

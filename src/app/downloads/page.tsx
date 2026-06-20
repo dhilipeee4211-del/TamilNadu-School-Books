@@ -93,8 +93,11 @@ export default function DownloadsPage() {
 
       // 3. Filter books matching cached URLs
       const matchedBooks = booksCatalog.filter(book => {
-        // PDF URLs might be relative or absolute, normalize matching
-        return cachedUrls.some(url => url.includes(book.pdf_url) || book.pdf_url.includes(url));
+        // PDF URLs might be relative or absolute, normalize matching including proxied routes
+        return cachedUrls.some(url => {
+          const decoded = decodeURIComponent(url);
+          return url.includes(book.pdf_url) || book.pdf_url.includes(url) || decoded.includes(book.pdf_url);
+        });
       });
 
       setDownloadedBooks(matchedBooks);
@@ -117,11 +120,12 @@ export default function DownloadsPage() {
       const PDF_CACHE_NAME = 'tn-school-book-pdf-cache-v1';
       const cache = await caches.open(PDF_CACHE_NAME);
       
-      // Delete cached requests containing the pdf url
+      // Delete cached requests containing the pdf url (handling proxy URLs)
       const keys = await cache.keys();
       let deleted = false;
       for (const req of keys) {
-        if (req.url.includes(book.pdf_url) || book.pdf_url.includes(req.url)) {
+        const decoded = decodeURIComponent(req.url);
+        if (req.url.includes(book.pdf_url) || book.pdf_url.includes(req.url) || decoded.includes(book.pdf_url)) {
           await cache.delete(req);
           deleted = true;
         }

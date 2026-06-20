@@ -36,7 +36,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // If fetching a PDF, apply a Cache-First / Cache-and-Update strategy
-  if (url.pathname.endsWith('.pdf') || event.request.url.includes('storage/v1/object/public/books')) {
+  if (
+    url.pathname.endsWith('.pdf') || 
+    event.request.url.includes('storage/v1/object/public/books') ||
+    url.pathname.includes('/api/pdf-proxy')
+  ) {
     event.respondWith(
       caches.open(PDF_CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((cachedResponse) => {
