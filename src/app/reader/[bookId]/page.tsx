@@ -609,22 +609,7 @@ export default function ReaderPage() {
     return () => observer.disconnect();
   }, [scrollContainerRef, pdfLoading]);
 
-  // Listen for global Ctrl+Z to undo drawing when in pencil mode
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Avoid triggering if user is currently inside an input/textarea element
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
-        return;
-      }
-      if (activeTool === 'pen' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        handleUndoDrawing(currentPage);
-      }
-    };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool, currentPage, handleUndoDrawing]);
 
   const colors = [
     { name: 'Yellow', hex: '#fbbf24' },
@@ -1178,6 +1163,23 @@ export default function ReaderPage() {
     if (!confirm(`Clear all pencil drawings on page ${pageNum}?`)) return;
     await handleSaveDrawing(pageNum, []);
   };
+
+  // Listen for global Ctrl+Z to undo drawing when in pencil mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Avoid triggering if user is currently inside an input/textarea element
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (activeTool === 'pen' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndoDrawing(currentPage);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTool, currentPage, handleUndoDrawing]);
 
   // Toggle Bookmark state on current page
   const handleToggleBookmark = async () => {
