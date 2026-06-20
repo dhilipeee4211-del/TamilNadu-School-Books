@@ -33,6 +33,11 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Only intercept GET requests. Non-GET requests (POST, PUT, DELETE) should bypass the SW.
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   const url = new URL(event.request.url);
 
   // If fetching a PDF, apply a Cache-First / Cache-and-Update strategy
