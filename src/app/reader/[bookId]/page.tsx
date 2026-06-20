@@ -34,6 +34,19 @@ import * as pdfjs from 'pdfjs-dist';
 // Set worker CDN matching the installed package
 if (typeof window !== 'undefined') {
   pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@6.0.227/build/pdf.worker.min.mjs`;
+
+  // Suppress redundant PDFJS warnings in browser console
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    const firstArg = args[0];
+    if (
+      typeof firstArg === 'string' &&
+      (firstArg.includes('glyf') || firstArg.includes('TT:') || firstArg.includes('pdfjs-dist') || firstArg.includes('pdf.worker'))
+    ) {
+      return;
+    }
+    originalWarn(...args);
+  };
 }
 
 interface Book {
@@ -783,7 +796,8 @@ export default function ReaderPage() {
         // pdfjs loading
         const loadingTask = pdfjs.getDocument({
           url: proxyUrl,
-          withCredentials: false
+          withCredentials: false,
+          verbosity: 0
         });
 
         const doc = await loadingTask.promise;
