@@ -1,6 +1,15 @@
 -- Enable UUID extension
 create extension if not exists "uuid-ossp";
 
+-- Drop pre-existing tables if they block migrations
+drop table if exists public.reading_progress cascade;
+drop table if exists public.bookmarks cascade;
+drop table if exists public.notes cascade;
+drop table if exists public.highlights cascade;
+drop table if exists public.subscriptions cascade;
+drop table if exists public.books cascade;
+drop table if exists public.profiles cascade;
+
 -- 1. PROFILES TABLE
 create table public.profiles (
   id uuid references auth.users on delete cascade primary key,
@@ -201,6 +210,8 @@ begin
   return new;
 end;
 $$ language plpgsql security definer;
+
+drop trigger if exists on_auth_user_created on auth.users;
 
 create trigger on_auth_user_created
   after insert on auth.users

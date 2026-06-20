@@ -49,6 +49,20 @@ function LibraryContent() {
 
   const [showPremiumDialog, setShowPremiumDialog] = useState(false);
 
+  // Dynamically extract subjects to include custom uploaded ones
+  const dynamicSubjects = ['All Subjects', ...Array.from(new Set([
+    'Tamil',
+    'English',
+    'Mathematics',
+    'Science',
+    'Social Science',
+    'Physics',
+    'Chemistry',
+    'Biology',
+    'Computer Science',
+    ...books.map(b => b.subject)
+  ]))];
+
   // Sync URL search params to component state when they change
   useEffect(() => {
     if (initialClassFilter) setSelectedClass(initialClassFilter);
@@ -172,7 +186,7 @@ function LibraryContent() {
               }}
               className="block w-full pl-10 pr-4 py-2.5 border.5 border-outline rounded-2xl text-xs bg-surface-variant/25 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all appearance-none cursor-pointer"
             >
-              {SUBJECTS.map((sub) => (
+              {dynamicSubjects.map((sub) => (
                 <option key={sub} value={sub}>{sub}</option>
               ))}
             </select>

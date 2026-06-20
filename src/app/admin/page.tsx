@@ -50,7 +50,10 @@ export default function AdminPage() {
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [classNum, setClassNum] = useState(1);
+  const [subjectList, setSubjectList] = useState(SUBJECTS);
   const [subject, setSubject] = useState(SUBJECTS[0]);
+  const [newSubjectInput, setNewSubjectInput] = useState('');
+  const [showAddSubject, setShowAddSubject] = useState(false);
   const [isPremiumToggle, setIsPremiumToggle] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -280,16 +283,55 @@ export default function AdminPage() {
 
               <div>
                 <label className="text-[10px] font-bold text-on-surface-variant block mb-1">Subject Category *</label>
-                <select
-                  id="admin-book-subject"
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  className="block w-full px-3 py-2 border border-outline-variant rounded-xl text-xs bg-surface-variant/25 text-foreground cursor-pointer focus:outline-none focus:ring-2"
-                >
-                  {SUBJECTS.map((sub) => (
-                    <option key={sub} value={sub}>{sub}</option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    id="admin-book-subject"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-outline-variant rounded-xl text-xs bg-surface-variant/25 text-foreground cursor-pointer focus:outline-none focus:ring-2 min-w-0"
+                  >
+                    {subjectList.map((sub) => (
+                      <option key={sub} value={sub}>{sub}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddSubject(!showAddSubject)}
+                    className="px-2.5 py-2 bg-primary/10 text-primary text-xs font-bold rounded-xl border border-primary/20 hover:bg-primary/20 transition-all flex-shrink-0"
+                    title="Add dynamic subject"
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
+
+                {showAddSubject && (
+                  <div className="flex gap-2 mt-2 animate-fade-in">
+                    <input
+                      type="text"
+                      placeholder="Add new subject name..."
+                      value={newSubjectInput}
+                      onChange={(e) => setNewSubjectInput(e.target.value)}
+                      className="flex-1 px-3 py-1.5 border border-outline-variant rounded-xl text-xs bg-surface-variant/20 text-foreground focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const trimmed = newSubjectInput.trim();
+                        if (trimmed) {
+                          if (!subjectList.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
+                            setSubjectList([...subjectList, trimmed]);
+                          }
+                          setSubject(trimmed);
+                          setNewSubjectInput('');
+                          setShowAddSubject(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-xl hover:bg-primary/95 shadow-sm transition-all"
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
