@@ -39,6 +39,14 @@ const SUBJECTS = [
   'Computer Science'
 ];
 
+const getRelativeStoragePath = (url: string) => {
+  const parts = url.split('/books/');
+  if (parts.length > 1) {
+    return parts[1];
+  }
+  return null;
+};
+
 export default function AdminPage() {
   const { user, profile, isAdmin, loading } = useAuth();
   const router = useRouter();
@@ -214,10 +222,32 @@ export default function AdminPage() {
 
       if (error) {
         setFeedback({ type: 'error', text: error.message });
-      } else {
-        setFeedback({ type: 'success', text: 'Book deleted successfully!' });
-        await fetchBooks();
+        return;
       }
+
+      // 2. Extract paths and clean up storage files
+      const pathsToDelete: string[] = [];
+      if (book.pdf_url) {
+        const pdfPath = getRelativeStoragePath(book.pdf_url);
+        if (pdfPath) pathsToDelete.push(pdfPath);
+      }
+      if (book.thumbnail_url) {
+        const thumbnailPath = getRelativeStoragePath(book.thumbnail_url);
+        if (thumbnailPath) pathsToDelete.push(thumbnailPath);
+      }
+
+      if (pathsToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage
+          .from('books')
+          .remove(pathsToDelete);
+        
+        if (storageError) {
+          console.error('Failed to clean up storage files:', storageError);
+        }
+      }
+
+      setFeedback({ type: 'success', text: 'Book and assets deleted successfully!' });
+      await fetchBooks();
     } catch (err: unknown) {
       console.error(err);
       setFeedback({ type: 'error', text: 'Failed to delete book.' });
