@@ -2,6 +2,7 @@
 create extension if not exists "uuid-ossp";
 
 -- Drop pre-existing tables if they block migrations
+drop table if exists public.drawings cascade;
 drop table if exists public.reading_progress cascade;
 drop table if exists public.bookmarks cascade;
 drop table if exists public.notes cascade;
@@ -292,4 +293,25 @@ create policy "Admins can delete files from books bucket"
       where profiles.id = auth.uid() and profiles.role = 'admin'
     )
   );
+
+-- 9. DRAWINGS TABLE (XODO PENCIL TOOL SYNC)
+create table public.drawings (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  book_id uuid references public.books(id) on delete cascade not null,
+  page_number integer not null,
+  strokes jsonb not null, -- Stores array of strokes [{color, width, points: [{x, y}]}]
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  unique (user_id, book_id, page_number)
+);
+
+-- Enable RLS for Drawings
+alter table public.drawings enable row level security;
+
+-- Drawings Policies
+create policy "Users can manage their own drawings"
+  on public.drawings for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
