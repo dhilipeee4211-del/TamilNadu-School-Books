@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { supabase } from '@/lib/supabase';
-import { BookOpen, Search, Filter, Crown, Eye, Lock, RefreshCw } from 'lucide-react';
+import { BookOpen, Search, Filter, Crown, Eye, Lock, RefreshCw, DownloadCloud, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 
 interface Book {
@@ -49,6 +49,10 @@ function LibraryContent() {
 
   const [showPremiumDialog, setShowPremiumDialog] = useState(false);
 
+  // Download & cache status states
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  const [downloadedBooksMap, setDownloadedBooksMap] = useState<Record<string, boolean>>({});
+
   // Dynamically extract subjects to include custom uploaded ones
   const dynamicSubjects = ['All Subjects', ...Array.from(new Set([
     'Tamil',
@@ -69,6 +73,23 @@ function LibraryContent() {
     if (initialSubjectFilter) setSelectedSubject(initialSubjectFilter);
   }, [initialClassFilter, initialSubjectFilter]);
 
+  const syncCachedStatus = async (booksList: Book[]) => {
+    if (typeof window === 'undefined' || !('caches' in window)) return;
+    try {
+      const cache = await caches.open('tn-school-book-pdf-cache-v1');
+      const keys = await cache.keys();
+      const cachedUrls = keys.map(request => request.url);
+      
+      const map: Record<string, boolean> = {};
+      booksList.forEach(book => {
+        map[book.id] = cachedUrls.some(url => url.includes(book.pdf_url) || book.pdf_url.includes(url));
+      });
+      setDownloadedBooksMap(map);
+    } catch (err) {
+      console.error('Failed to sync cache list:', err);
+    }
+  };
+
   // Fetch books from Supabase
   const fetchBooks = async () => {
     try {
@@ -80,7 +101,9 @@ function LibraryContent() {
       if (error) {
         console.error('Error fetching books:', error);
       } else if (data) {
-        setBooks(data as Book[]);
+        const fetchedBooks = data as Book[];
+        setBooks(fetchedBooks);
+        await syncCachedStatus(fetchedBooks);
       }
     } catch (err) {
       console.error('Failed to run books query:', err);
@@ -92,6 +115,92 @@ function LibraryContent() {
   useEffect(() => {
     fetchBooks();
   }, []);
+
+  const handleDownloadBook = async (book: Book, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    if (book.is_premium && !isPremium) {
+      setShowPremiumDialog(true);
+      return;
+    }
+
+    if (downloadProgress[book.id] !== undefined) {
+      return;
+    }
+
+    try {
+      setDownloadProgress(prev => ({ ...prev, [book.id]: 0 }));
+
+      // Fetch the file with progress
+      const response = await fetch(book.pdf_url);
+      if (!response.ok) throw new Error('Network response was not ok');
+      
+      const reader = response.body?.getReader();
+      const contentLength = +(response.headers.get('Content-Length') || 0);
+      
+      let receivedLength = 0;
+      const chunks = [];
+      
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          receivedLength += value.length;
+          const percent = contentLength ? Math.round((receivedLength / contentLength) * 100) : 0;
+          setDownloadProgress(prev => ({ ...prev, [book.id]: percent }));
+        }
+      }
+
+      // Consolidate fragments and write to cache
+      const blob = new Blob(chunks);
+      const cacheResponse = new Response(blob, {
+        headers: response.headers
+      });
+
+      const cache = await caches.open('tn-school-book-pdf-cache-v1');
+      await cache.put(book.pdf_url, cacheResponse);
+
+      setDownloadedBooksMap(prev => ({ ...prev, [book.id]: true }));
+      alert(`"${book.title}" is now available offline!`);
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Failed to download book for offline use.');
+    } finally {
+      setDownloadProgress(prev => {
+        const next = { ...prev };
+        delete next[book.id];
+        return next;
+      });
+    }
+  };
+
+  const handleDeleteDownload = async (book: Book, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Are you sure you want to remove offline download for ${book.title}?`)) return;
+
+    try {
+      const cache = await caches.open('tn-school-book-pdf-cache-v1');
+      const keys = await cache.keys();
+      let deleted = false;
+      for (const req of keys) {
+        if (req.url.includes(book.pdf_url) || book.pdf_url.includes(req.url)) {
+          await cache.delete(req);
+          deleted = true;
+        }
+      }
+
+      if (deleted) {
+        setDownloadedBooksMap(prev => ({ ...prev, [book.id]: false }));
+        alert('Offline download cache removed.');
+      } else {
+        alert('Could not find cached file.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to delete file from cache.');
+    }
+  };
 
   // Filter books on client-side for rapid search/responsiveness
   const filteredBooks = books.filter((book) => {
@@ -260,24 +369,57 @@ function LibraryContent() {
               </div>
 
               {/* Footer CTA */}
-              <button
-                onClick={() => handleReadBook(book)}
-                className={`mt-4 w-full text-xs font-bold py-2 rounded-2xl flex items-center justify-center gap-1 transition-all ${
-                  book.is_premium && !isPremium
-                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
-                    : 'bg-primary-container text-on-primary-container hover:bg-primary-container/80'
-                }`}
-              >
-                {book.is_premium && !isPremium ? (
-                  <>
-                    <Lock size={12} /> Unlock Premium
-                  </>
-                ) : (
-                  <>
-                    Open Reader
-                  </>
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={() => handleReadBook(book)}
+                  className={`flex-1 text-xs font-bold py-2 rounded-2xl flex items-center justify-center gap-1 transition-all ${
+                    book.is_premium && !isPremium
+                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
+                      : 'bg-primary-container text-on-primary-container hover:bg-primary-container/80'
+                  }`}
+                >
+                  {book.is_premium && !isPremium ? (
+                    <>
+                      <Lock size={12} /> Unlock Premium
+                    </>
+                  ) : (
+                    <>
+                      Open Reader
+                    </>
+                  )}
+                </button>
+
+                {!(book.is_premium && !isPremium) && (
+                  <div className="flex-shrink-0">
+                    {downloadProgress[book.id] !== undefined ? (
+                      <div 
+                        className="relative w-9 h-9 flex items-center justify-center rounded-2xl bg-primary/10 border border-primary/20 text-primary font-bold text-[9px]"
+                        title="Downloading..."
+                      >
+                        <Loader2 className="w-4 h-4 animate-spin opacity-45 absolute" />
+                        <span className="z-10">{downloadProgress[book.id]}%</span>
+                      </div>
+                    ) : downloadedBooksMap[book.id] ? (
+                      <button
+                        onClick={(e) => handleDeleteDownload(book, e)}
+                        className="w-9 h-9 flex items-center justify-center rounded-2xl bg-green-500/10 hover:bg-red-500/10 border border-green-500/25 hover:border-red-500/25 text-green-600 dark:text-green-400 hover:text-red-500 transition-all group/del"
+                        title="Downloaded. Click to delete."
+                      >
+                        <CheckCircle2 size={16} className="block group-hover/del:hidden" />
+                        <Trash2 size={14} className="hidden group-hover/del:block" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => handleDownloadBook(book, e)}
+                        className="w-9 h-9 flex items-center justify-center rounded-2xl bg-surface-variant/40 hover:bg-primary/10 border border-outline-variant hover:border-primary/25 text-on-surface-variant hover:text-primary transition-all"
+                        title="Download for offline"
+                      >
+                        <DownloadCloud size={16} />
+                      </button>
+                    )}
+                  </div>
                 )}
-              </button>
+              </div>
 
             </div>
           ))}

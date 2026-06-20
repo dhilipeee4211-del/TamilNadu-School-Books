@@ -58,6 +58,9 @@ export default function AdminPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
 
+  const [pdfProgress, setPdfProgress] = useState<number | null>(null);
+  const [imageProgress, setImageProgress] = useState<number | null>(null);
+
   const [actionLoading, setActionLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -94,7 +97,11 @@ export default function AdminPage() {
     }
   }, [user, isAdmin]);
 
-  const handleUploadFile = async (file: File, folder: string): Promise<string> => {
+  const handleUploadFile = async (
+    file: File, 
+    folder: string,
+    onProgress?: (percent: number) => void
+  ): Promise<string> => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${folder}/${Math.random().toString(36).substring(2)}-${Date.now()}.${fileExt}`;
     
@@ -102,8 +109,12 @@ export default function AdminPage() {
       .from('books')
       .upload(fileName, file, {
         cacheControl: '3600',
-        upsert: false
-      });
+        upsert: false,
+        onUploadProgress: (progressEvent: { loaded: number; total: number }) => {
+          const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+          onProgress?.(percent);
+        }
+      } as unknown as Record<string, unknown>);
 
     if (error) {
       throw error;
@@ -126,15 +137,25 @@ export default function AdminPage() {
 
     setActionLoading(true);
     setFeedback(null);
+    setPdfProgress(0);
+    if (imageFile) {
+      setImageProgress(0);
+    } else {
+      setImageProgress(null);
+    }
 
     try {
       // 1. Upload PDF
-      const pdfUrl = await handleUploadFile(pdfFile, 'pdfs');
+      const pdfUrl = await handleUploadFile(pdfFile, 'pdfs', (percent) => {
+        setPdfProgress(percent);
+      });
 
       // 2. Upload Thumbnail (Optional)
       let thumbnailUrl = null;
       if (imageFile) {
-        thumbnailUrl = await handleUploadFile(imageFile, 'thumbnails');
+        thumbnailUrl = await handleUploadFile(imageFile, 'thumbnails', (percent) => {
+          setImageProgress(percent);
+        });
       }
 
       // 3. Insert Book Record into Database
@@ -171,6 +192,10 @@ export default function AdminPage() {
       setFeedback({ type: 'error', text: errMsg });
     } finally {
       setActionLoading(false);
+      setTimeout(() => {
+        setPdfProgress(null);
+        setImageProgress(null);
+      }, 1500);
     }
   };
 
@@ -287,16 +312,34 @@ export default function AdminPage() {
                   <select
                     id="admin-book-subject"
                     value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
+                    onChange={(e) => {
+                      if (e.target.value === 'ADD_EXTRA_SUBJECT') {
+                        setShowAddSubject(true);
+                        setTimeout(() => {
+                          document.getElementById('new-subject-input')?.focus();
+                        }, 50);
+                      } else {
+                        setSubject(e.target.value);
+                        setShowAddSubject(false);
+                      }
+                    }}
                     className="flex-1 px-3 py-2 border border-outline-variant rounded-xl text-xs bg-surface-variant/25 text-foreground cursor-pointer focus:outline-none focus:ring-2 min-w-0"
                   >
                     {subjectList.map((sub) => (
                       <option key={sub} value={sub}>{sub}</option>
                     ))}
+                    <option value="ADD_EXTRA_SUBJECT" className="text-primary font-semibold font-bold">+ Add Extra Subject...</option>
                   </select>
                   <button
                     type="button"
-                    onClick={() => setShowAddSubject(!showAddSubject)}
+                    onClick={() => {
+                      setShowAddSubject(!showAddSubject);
+                      if (!showAddSubject) {
+                        setTimeout(() => {
+                          document.getElementById('new-subject-input')?.focus();
+                        }, 50);
+                      }
+                    }}
                     className="px-2.5 py-2 bg-primary/10 text-primary text-xs font-bold rounded-xl border border-primary/20 hover:bg-primary/20 transition-all flex-shrink-0"
                     title="Add dynamic subject"
                   >
@@ -307,6 +350,7 @@ export default function AdminPage() {
                 {showAddSubject && (
                   <div className="flex gap-2 mt-2 animate-fade-in">
                     <input
+                      id="new-subject-input"
                       type="text"
                       placeholder="Add new subject name..."
                       value={newSubjectInput}
@@ -329,6 +373,16 @@ export default function AdminPage() {
                       className="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-xl hover:bg-primary/95 shadow-sm transition-all"
                     >
                       Add
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddSubject(false);
+                        setSubject(subjectList[0]);
+                      }}
+                      className="px-2 py-1.5 border border-outline-variant rounded-xl text-[10px] hover:bg-surface-variant/25 transition-all text-on-surface-variant"
+                    >
+                      Cancel
                     </button>
                   </div>
                 )}
@@ -400,6 +454,40 @@ export default function AdminPage() {
                 </div>
               </div>
             </div>
+
+            {/* Upload progress bars */}
+            {(pdfProgress !== null || imageProgress !== null) && (
+              <div className="p-3 bg-surface-variant/30 rounded-2xl border border-outline-variant/60 space-y-2.5 animate-fade-in text-xs">
+                {pdfProgress !== null && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between font-semibold text-[10px] text-on-surface-variant">
+                      <span>PDF Document Upload</span>
+                      <span>{pdfProgress}%</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-surface-variant/60 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-primary transition-all duration-150 rounded-full" 
+                        style={{ width: `${pdfProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                {imageProgress !== null && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between font-semibold text-[10px] text-on-surface-variant">
+                      <span>Cover Image Upload</span>
+                      <span>{imageProgress}%</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-surface-variant/60 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-secondary transition-all duration-150 rounded-full" 
+                        style={{ width: `${imageProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <button
               id="submit-book-btn"

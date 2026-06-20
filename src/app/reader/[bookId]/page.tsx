@@ -20,7 +20,9 @@ import {
   X,
   MessageSquarePlus,
   BookmarkCheck,
-  BookOpen
+  BookOpen,
+  DownloadCloud,
+  CheckCircle2
 } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 
@@ -100,6 +102,10 @@ export default function ReaderPage() {
   const [pdfLoading, setPdfLoading] = useState(true);
   const [renderingPage, setRenderingPage] = useState(false);
 
+  // Cache download progress tracking states
+  const [isCachedOffline, setIsCachedOffline] = useState(false);
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -141,6 +147,7 @@ export default function ReaderPage() {
         }
 
         setBook(bookData);
+        await checkOfflineStatus(bookData.pdf_url);
       } catch (err) {
         console.error(err);
       }
@@ -150,6 +157,63 @@ export default function ReaderPage() {
       fetchBookDetails();
     }
   }, [user, bookId, isPremium, loading, router]);
+
+  const checkOfflineStatus = async (url: string) => {
+    if (typeof window === 'undefined' || !('caches' in window)) return;
+    try {
+      const cache = await caches.open('tn-school-book-pdf-cache-v1');
+      const keys = await cache.keys();
+      const cached = keys.some(req => req.url.includes(url) || url.includes(req.url));
+      setIsCachedOffline(cached);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDownloadReader = async () => {
+    if (!book) return;
+    if (downloadPercent !== null) return;
+
+    try {
+      setDownloadPercent(0);
+
+      const response = await fetch(book.pdf_url);
+      if (!response.ok) throw new Error('Response was not ok');
+
+      const reader = response.body?.getReader();
+      const contentLength = +(response.headers.get('Content-Length') || 0);
+
+      let receivedLength = 0;
+      const chunks = [];
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          receivedLength += value.length;
+          const percent = contentLength ? Math.round((receivedLength / contentLength) * 100) : 0;
+          setDownloadPercent(percent);
+        }
+      }
+
+      const blob = new Blob(chunks);
+      const cacheResponse = new Response(blob, {
+        headers: response.headers
+      });
+
+      const cache = await caches.open('tn-school-book-pdf-cache-v1');
+      await cache.put(book.pdf_url, cacheResponse);
+
+      setIsCachedOffline(true);
+      alert('Book saved for offline use!');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to download book for offline use.');
+    } finally {
+      setDownloadPercent(null);
+    }
+  };
 
   // 2. Fetch User Annotation States (bookmarks, highlights, reading progress)
   useEffect(() => {
@@ -614,6 +678,33 @@ export default function ReaderPage() {
             >
               <ChevronRight size={16} />
             </button>
+          </div>
+
+          {/* Offline Cache Controls */}
+          <div className="flex items-center">
+            {downloadPercent !== null ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border border-primary/20 bg-primary/5 rounded-xl text-xs text-primary font-bold">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span className="text-[10px]">Saving {downloadPercent}%</span>
+              </div>
+            ) : isCachedOffline ? (
+              <div 
+                className="flex items-center gap-1 px-2.5 py-1.5 border border-green-500/20 bg-green-500/5 rounded-xl text-xs text-green-600 dark:text-green-400 font-bold"
+                title="This book is cached and available for offline reading"
+              >
+                <CheckCircle2 size={14} />
+                <span className="text-[10px] hidden sm:inline">Offline Ready</span>
+              </div>
+            ) : (
+              <button
+                onClick={handleDownloadReader}
+                className="flex items-center gap-1 px-2.5 py-1.5 border border-outline-variant hover:border-primary/25 hover:bg-primary/5 rounded-xl text-xs text-on-surface-variant hover:text-primary transition-all font-bold"
+                title="Download PDF to browser cache for offline use"
+              >
+                <DownloadCloud size={14} />
+                <span className="text-[10px] hidden sm:inline">Save Offline</span>
+              </button>
+            )}
           </div>
 
           {/* Bookmark Switch */}
