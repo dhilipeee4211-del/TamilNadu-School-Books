@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+:root {
+  /* Material Design 3 Light Palette */
+  --background: #fef7ff;
+  --foreground: #1d1b20;
+  --primary: #6750a4;
+  --primary-container: #eaddff;
+  --on-primary: #ffffff;
+  --on-primary-container: #21005d;
+  --secondary: #625b71;
+  --secondary-container: #e8def8;
+  --on-secondary: #ffffff;
+  --on-secondary-container: #1d192b;
+  --surface: #f7f2fa;
+  --surface-variant: #e7e0ec;
+  --on-surface: #1d1b20;
+  --on-surface-variant: #49454f;
+  --outline: #79747e;
+  --outline-variant: #c4c7c5;
+  --error: #ba1a1a;
+  --error-container: #ffdad6;
+  --on-error: #ffffff;
+}
+
+.dark {
+  /* Material Design 3 Dark Palette */
+  --background: #141218;
+  --foreground: #e6e1e5;
+  --primary: #d0bcff;
+  --primary-container: #4f378b;
+  --on-primary: #381e72;
+  --on-primary-container: #eaddff;
+  --secondary: #ccc2dc;
+  --secondary-container: #4a4458;
+  --on-secondary: #332d41;
+  --on-secondary-container: #e8def8;
+  --surface: #1d1b20;
+  --surface-variant: #49454f;
+  --on-surface: #e6e1e5;
+  --on-surface-variant: #c4c7c5;
+  --outline: #938f99;
+  --outline-variant: #444746;
+  --error: #ffb4ab;
+  --error-container: #93000a;
+  --on-error: #690005;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary: var(--on-primary);
+  --color-on-primary-container: var(--on-primary-container);
+  --color-secondary-color: var(--secondary);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-secondary: var(--on-secondary);
+  --color-on-secondary-container: var(--on-secondary-container);
+  --color-surface: var(--surface);
+  --color-surface-variant: var(--surface-variant);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-error: var(--error);
+  --color-error-container: var(--error-container);
+  --color-on-error: var(--on-error);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Outfit', sans-serif, system-ui;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Custom Webkit Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
+}
+
+/* PDF.js Text Layer Overlay Styles */
+.textLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  opacity: 0.2; /* Allows underlying canvas to show but text remains selectable */
+  line-height: 1;
+  transform-origin: 0 0;
+}
+
+.textLayer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.textLayer span::selection {
+  background: rgba(103, 80, 164, 0.4);
+}
+
+/* Highlights Overlay Container */
+.highlight-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.highlight-item {
+  position: absolute;
+  mix-blend-mode: multiply;
+  opacity: 0.6;
+  border-radius: 2px;
+  transition: opacity 0.2s ease;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.highlight-item:hover {
+  opacity: 0.8;
+}
+
+.dark .highlight-item {
+  mix-blend-mode: screen;
+  opacity: 0.45;
+}
+
+.dark .highlight-item:hover {
+  opacity: 0.65;
+}
+
+/* Standard Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Bottom navigation dynamic active transitions */
+.nav-active-pill {
+  position: relative;
+}
+.nav-active-pill::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 4px;
+  border-radius: 99px;
+  background-color: var(--primary);
+}
