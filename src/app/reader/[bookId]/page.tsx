@@ -27,7 +27,9 @@ import {
   Grid,
   Eraser,
   Moon,
-  Sun
+  Sun,
+  Undo2,
+  Check
 } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 
@@ -109,6 +111,11 @@ interface PageSlotProps {
   ) => void;
   onPageIntersect: (pageNum: number) => void;
   onPageDoubleClick: () => void;
+  onHighlightClick: (
+    hl: Highlight,
+    rect: { left: number; top: number; width: number; height: number },
+    pageNum: number
+  ) => void;
 }
 
 const PageSlot: React.FC<PageSlotProps> = ({
@@ -125,7 +132,8 @@ const PageSlot: React.FC<PageSlotProps> = ({
   onSaveDrawing,
   onTextSelected,
   onPageIntersect,
-  onPageDoubleClick
+  onPageDoubleClick,
+  onHighlightClick
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -458,17 +466,25 @@ const PageSlot: React.FC<PageSlotProps> = ({
               return hl.rects.map((r, idx) => (
                 <div
                   key={`${hl.id}-${idx}`}
-                  className="absolute"
+                  className={`absolute pointer-events-auto cursor-pointer rounded-[3px] transition-all duration-150 ${
+                    (isUnderline || isStrikeout) 
+                      ? 'hover:bg-surface-variant/20 hover:scale-y-110' 
+                      : 'mix-blend-multiply opacity-[0.35] hover:opacity-[0.55]'
+                  }`}
                   style={{
                     left: `${r.left}%`,
                     top: `${r.top}%`,
                     width: `${r.width}%`,
                     height: `${r.height}%`,
-                    backgroundColor: (isUnderline || isStrikeout) ? 'transparent' : `${colorValue}35`,
+                    backgroundColor: (isUnderline || isStrikeout) ? 'transparent' : colorValue,
                     borderBottom: isUnderline ? `2.5px solid ${colorValue}` : 'none',
                     backgroundImage: isStrikeout 
                       ? `linear-gradient(to bottom, transparent 48%, ${colorValue} 48%, ${colorValue} 52%, transparent 52%)`
                       : 'none',
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onHighlightClick(hl, r, pageNum);
                   }}
                   title={hl.notes || undefined}
                 />
@@ -539,6 +555,17 @@ export default function ReaderPage() {
   const [readingProgressId, setReadingProgressId] = useState<string | null>(null);
   const [drawingsMap, setDrawingsMap] = useState<Record<number, Stroke[]>>({});
 
+  // Drawing Undo & Sync history
+  const [drawingHistory, setDrawingHistory] = useState<Record<number, Stroke[][]>>({});
+  const drawingSyncTimeouts = useRef<Record<number, NodeJS.Timeout>>({});
+
+  // Floating markup edit card state
+  const [activeAnnotationEdit, setActiveAnnotationEdit] = useState<{
+    highlight: Highlight;
+    position: { x: number; y: number };
+    pageNum: number;
+  } | null>(null);
+
   // Text selection highlight popup toolbar
   const [activeSelection, setActiveSelection] = useState<{
     text: string;
@@ -584,6 +611,23 @@ export default function ReaderPage() {
 
     return () => observer.disconnect();
   }, [scrollContainerRef, pdfLoading]);
+
+  // Listen for global Ctrl+Z to undo drawing when in pencil mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Avoid triggering if user is currently inside an input/textarea element
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (activeTool === 'pen' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndoDrawing(currentPage);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTool, currentPage, drawingHistory]);
 
   const colors = [
     { name: 'Yellow', hex: '#fbbf24' },
@@ -991,15 +1035,100 @@ export default function ReaderPage() {
         alert(error.message);
       } else {
         setHighlights(highlights.filter(h => h.id !== hlId));
+        if (activeAnnotationEdit?.highlight.id === hlId) {
+          setActiveAnnotationEdit(null);
+        }
       }
     } catch (err) {
       console.error(err);
     }
   };
 
+  const handleHighlightClick = (
+    hl: Highlight,
+    rect: { left: number; top: number; width: number; height: number },
+    pageNum: number
+  ) => {
+    const pageEl = document.getElementById(`page-slot-${pageNum}`);
+    if (!pageEl) return;
+
+    const pageRect = pageEl.getBoundingClientRect();
+    const rectLeftPx = (rect.left / 100) * pageRect.width;
+    const rectTopPx = (rect.top / 100) * pageRect.height;
+    const rectWidthPx = (rect.width / 100) * pageRect.width;
+
+    setActiveAnnotationEdit({
+      highlight: hl,
+      position: {
+        x: rectLeftPx + rectWidthPx / 2,
+        y: rectTopPx + pageEl.offsetTop - 5
+      },
+      pageNum
+    });
+
+    setActiveSelection(null);
+  };
+
+  const handleUpdateHighlightColor = async (hlId: string, newColor: string) => {
+    const oldColor = highlights.find(h => h.id === hlId)?.color || '';
+    let finalColor = newColor;
+    if (oldColor.startsWith('underline:')) {
+      finalColor = `underline:${newColor}`;
+    } else if (oldColor.startsWith('strikeout:')) {
+      finalColor = `strikeout:${newColor}`;
+    }
+
+    setHighlights(prev => prev.map(h => h.id === hlId ? { ...h, color: finalColor } : h));
+    if (activeAnnotationEdit && activeAnnotationEdit.highlight.id === hlId) {
+      setActiveAnnotationEdit(prev => prev ? {
+        ...prev,
+        highlight: { ...prev.highlight, color: finalColor }
+      } : null);
+    }
+
+    try {
+      await supabase
+        .from('highlights')
+        .update({ color: finalColor, updated_at: new Date().toISOString() })
+        .eq('id', hlId);
+    } catch (err) {
+      console.error('Failed to update highlight color:', err);
+    }
+  };
+
+  const handleUpdateHighlightNotes = async (hlId: string, newNotes: string) => {
+    const notesValue = newNotes.trim() || null;
+
+    setHighlights(prev => prev.map(h => h.id === hlId ? { ...h, notes: notesValue } : h));
+    if (activeAnnotationEdit && activeAnnotationEdit.highlight.id === hlId) {
+      setActiveAnnotationEdit(prev => prev ? {
+        ...prev,
+        highlight: { ...prev.highlight, notes: notesValue }
+      } : null);
+    }
+
+    try {
+      await supabase
+        .from('highlights')
+        .update({ notes: notesValue, updated_at: new Date().toISOString() })
+        .eq('id', hlId);
+    } catch (err) {
+      console.error('Failed to update highlight notes:', err);
+    }
+  };
+
   // Save Pencil drawings to Database
-  const handleSaveDrawing = async (pageNum: number, strokes: Stroke[]) => {
+  const handleSaveDrawing = async (pageNum: number, strokes: Stroke[], isUndoAction = false) => {
     if (!user || !book) return;
+
+    // Save previous state to history stack if not an undo action itself
+    if (!isUndoAction) {
+      const currentStrokes = drawingsMap[pageNum] || [];
+      setDrawingHistory((prev) => ({
+        ...prev,
+        [pageNum]: [...(prev[pageNum] || []), currentStrokes]
+      }));
+    }
 
     try {
       setDrawingsMap((prev) => ({
@@ -1007,18 +1136,45 @@ export default function ReaderPage() {
         [pageNum]: strokes
       }));
 
-      await supabase
-        .from('drawings')
-        .upsert({
-          user_id: user.id,
-          book_id: book.id,
-          page_number: pageNum,
-          strokes: strokes,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id,book_id,page_number' });
+      // Clear any pending sync timeout for this page
+      if (drawingSyncTimeouts.current[pageNum]) {
+        clearTimeout(drawingSyncTimeouts.current[pageNum]);
+      }
+
+      // Debounce the Supabase sync by 1000ms
+      drawingSyncTimeouts.current[pageNum] = setTimeout(async () => {
+        try {
+          await supabase
+            .from('drawings')
+            .upsert({
+              user_id: user.id,
+              book_id: book.id,
+              page_number: pageNum,
+              strokes: strokes,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id,book_id,page_number' });
+        } catch (err) {
+          console.error('Failed to sync drawings to database:', err);
+        }
+      }, 1000);
     } catch (err) {
       console.error('Failed to sync drawings:', err);
     }
+  };
+
+  const handleUndoDrawing = async (pageNum: number) => {
+    const history = drawingHistory[pageNum] || [];
+    if (history.length === 0) return;
+
+    const previousState = history[history.length - 1];
+    const newHistory = history.slice(0, -1);
+
+    setDrawingHistory((prev) => ({
+      ...prev,
+      [pageNum]: newHistory
+    }));
+
+    await handleSaveDrawing(pageNum, previousState, true);
   };
 
   const handleClearDrawing = async (pageNum: number) => {
@@ -1377,6 +1533,16 @@ export default function ReaderPage() {
                 ))}
               </div>
 
+              {/* Undo button */}
+              <button
+                onClick={() => handleUndoDrawing(currentPage)}
+                disabled={!(drawingHistory[currentPage]?.length > 0)}
+                className="p-1 hover:bg-primary/10 text-primary disabled:opacity-30 disabled:hover:bg-transparent disabled:text-on-surface-variant/40 rounded-lg border border-outline-variant/40 hover:border-primary/30 transition-all flex items-center gap-1 text-[10px] font-bold"
+                title="Undo last drawing stroke (Ctrl+Z)"
+              >
+                <Undo2 size={12} /> Undo
+              </button>
+
               {/* Eraser button for current page */}
               <button
                 onClick={() => handleClearDrawing(currentPage)}
@@ -1691,84 +1857,167 @@ export default function ReaderPage() {
                 }}
                 onTextSelected={handleTextSelected}
                 onPageDoubleClick={handlePageDoubleClick}
+                onHighlightClick={handleHighlightClick}
               />
             );
           })}
+
+          {/* 4. TEXT MARKUP / SELECTION POPUP TOOLBAR */}
+          {activeSelection && (
+            <div 
+              className="absolute z-40 bg-surface border border-outline shadow-xl rounded-2xl p-2.5 flex flex-col gap-2.5 animate-fade-in max-w-[280px]"
+              style={{ 
+                left: `${activeSelection.position.x}px`, 
+                top: `${activeSelection.position.y - 120}px` // Lift tooltip up to fit additions
+              }}
+              onMouseDown={(e) => e.stopPropagation()} // Prevent selection resets
+            >
+              {/* Colors palette dots */}
+              <div className="flex justify-between items-center gap-1.5">
+                <span className="text-[9px] font-bold uppercase text-on-surface-variant">Color:</span>
+                <div className="flex gap-1">
+                  {colors.map((c) => (
+                    <button
+                      key={c.name}
+                      onClick={() => setSelectedHighlightColor(c.hex)}
+                      className={`w-4 h-4 rounded-full border cursor-pointer transition-transform ${
+                        selectedHighlightColor === c.hex ? 'scale-125 border-primary shadow-sm' : 'border-outline-variant/60'
+                      }`}
+                      style={{ backgroundColor: c.hex }}
+                    />
+                  ))}
+                </div>
+                <button 
+                  onClick={() => setActiveSelection(null)}
+                  className="text-on-surface-variant hover:text-foreground p-0.5 rounded-full hover:bg-surface-variant/30"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* Action markup modes row */}
+              <div className="flex gap-1 bg-surface-variant/20 rounded-xl p-0.5">
+                <button
+                  onClick={() => handleSaveHighlight('highlight')}
+                  className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
+                >
+                  <Highlighter size={10} /> Highlight
+                </button>
+                <button
+                  onClick={() => handleSaveHighlight('underline')}
+                  className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
+                >
+                  <span className="underline decoration-2">U</span> Underline
+                </button>
+                <button
+                  onClick={() => handleSaveHighlight('strikeout')}
+                  className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
+                >
+                  <span className="line-through decoration-2">S</span> Strikeout
+                </button>
+              </div>
+
+              {/* Note Input area */}
+              <div className="space-y-1 bg-surface-variant/10 p-1.5 rounded-xl border border-outline-variant/40">
+                <label className="text-[8px] font-bold uppercase text-on-surface-variant flex items-center gap-0.5">
+                  <StickyNote size={8} /> Annotation Notes:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Add thoughts/reminders..."
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  className="block w-full px-2 py-1 text-[10px] border border-outline-variant bg-surface text-foreground rounded-lg focus:outline-none"
+                />
+              </div>
+
+            </div>
+          )}
+
+          {/* 4b. INTERACTIVE MARKUP / HIGHLIGHT EDITING CARD */}
+          {activeAnnotationEdit && (
+            <div 
+              className="absolute z-40 bg-surface/95 backdrop-blur-md border border-outline shadow-xl rounded-2xl p-3 flex flex-col gap-2.5 animate-fade-in max-w-[280px]"
+              style={{ 
+                left: `${activeAnnotationEdit.position.x}px`, 
+                top: `${activeAnnotationEdit.position.y - 120}px` // position above highlight
+              }}
+              onMouseDown={(e) => e.stopPropagation()} // Prevent deselection
+            >
+              {/* Colors palette dots */}
+              <div className="flex justify-between items-center gap-1.5">
+                <span className="text-[9px] font-bold uppercase text-on-surface-variant">Color:</span>
+                <div className="flex gap-1">
+                  {colors.map((c) => {
+                    const isUnderline = activeAnnotationEdit.highlight.color.startsWith('underline:');
+                    const isStrikeout = activeAnnotationEdit.highlight.color.startsWith('strikeout:');
+                    const currentHex = (isUnderline || isStrikeout) 
+                      ? activeAnnotationEdit.highlight.color.split(':')[1] 
+                      : activeAnnotationEdit.highlight.color;
+
+                    return (
+                      <button
+                        key={c.name}
+                        onClick={() => handleUpdateHighlightColor(activeAnnotationEdit.highlight.id, c.hex)}
+                        className={`w-4 h-4 rounded-full border cursor-pointer transition-transform ${
+                          currentHex === c.hex ? 'scale-125 border-primary shadow-sm ring-1 ring-primary/20' : 'border-outline-variant/60 hover:scale-110'
+                        }`}
+                        style={{ backgroundColor: c.hex }}
+                        title={c.name}
+                      />
+                    );
+                  })}
+                </div>
+                <button 
+                  onClick={() => setActiveAnnotationEdit(null)}
+                  className="text-on-surface-variant hover:text-foreground p-0.5 rounded-full hover:bg-surface-variant/30"
+                  title="Close menu"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* Note Input area */}
+              <div className="space-y-1 bg-surface-variant/10 p-1.5 rounded-xl border border-outline-variant/40">
+                <label className="text-[8px] font-bold uppercase text-on-surface-variant flex items-center gap-0.5">
+                  <StickyNote size={8} /> Annotation Notes:
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Add thoughts/reminders..."
+                    defaultValue={activeAnnotationEdit.highlight.notes || ''}
+                    onBlur={(e) => handleUpdateHighlightNotes(activeAnnotationEdit.highlight.id, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleUpdateHighlightNotes(activeAnnotationEdit.highlight.id, (e.target as HTMLInputElement).value);
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="block flex-1 px-2 py-1 text-[10px] border border-outline-variant bg-surface text-foreground rounded-lg focus:outline-none focus:border-primary/40"
+                  />
+                </div>
+              </div>
+
+              {/* Action and page info row */}
+              <div className="flex justify-between items-center border-t border-outline-variant/30 pt-2 text-[10px]">
+                <span className="text-[8px] text-on-surface-variant/60 font-semibold select-none">
+                  Page {activeAnnotationEdit.highlight.page_number}
+                </span>
+                <button
+                  onClick={() => handleDeleteHighlight(activeAnnotationEdit.highlight.id)}
+                  className="px-2 py-1 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition-all flex items-center gap-1 font-bold text-[9px]"
+                  title="Delete annotation"
+                >
+                  <Trash2 size={10} /> Delete
+                </button>
+              </div>
+
+            </div>
+          )}
         </div>
 
       </div>
-
-      {/* 4. TEXT MARKUP / SELECTION POPUP TOOLBAR */}
-      {activeSelection && (
-        <div 
-          className="absolute z-40 bg-surface border border-outline shadow-xl rounded-2xl p-2.5 flex flex-col gap-2.5 animate-fade-in max-w-[280px]"
-          style={{ 
-            left: `${activeSelection.position.x}px`, 
-            top: `${activeSelection.position.y - 120}px` // Lift tooltip up to fit additions
-          }}
-          onMouseDown={(e) => e.stopPropagation()} // Prevent selection resets
-        >
-          {/* Colors palette dots */}
-          <div className="flex justify-between items-center gap-1.5">
-            <span className="text-[9px] font-bold uppercase text-on-surface-variant">Color:</span>
-            <div className="flex gap-1">
-              {colors.map((c) => (
-                <button
-                  key={c.name}
-                  onClick={() => setSelectedHighlightColor(c.hex)}
-                  className={`w-4 h-4 rounded-full border cursor-pointer transition-transform ${
-                    selectedHighlightColor === c.hex ? 'scale-125 border-primary shadow-sm' : 'border-outline-variant/60'
-                  }`}
-                  style={{ backgroundColor: c.hex }}
-                />
-              ))}
-            </div>
-            <button 
-              onClick={() => setActiveSelection(null)}
-              className="text-on-surface-variant hover:text-foreground p-0.5 rounded-full hover:bg-surface-variant/30"
-            >
-              <X size={12} />
-            </button>
-          </div>
-
-          {/* Action markup modes row */}
-          <div className="flex gap-1 bg-surface-variant/20 rounded-xl p-0.5">
-            <button
-              onClick={() => handleSaveHighlight('highlight')}
-              className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
-            >
-              <Highlighter size={10} /> Highlight
-            </button>
-            <button
-              onClick={() => handleSaveHighlight('underline')}
-              className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
-            >
-              <span className="underline decoration-2">U</span> Underline
-            </button>
-            <button
-              onClick={() => handleSaveHighlight('strikeout')}
-              className="flex-1 py-1 text-[10px] font-bold hover:bg-surface hover:text-primary rounded-lg transition-all border border-transparent shadow-sm flex items-center justify-center gap-0.5 text-on-surface-variant"
-            >
-              <span className="line-through decoration-2">S</span> Strikeout
-            </button>
-          </div>
-
-          {/* Note Input area */}
-          <div className="space-y-1 bg-surface-variant/10 p-1.5 rounded-xl border border-outline-variant/40">
-            <label className="text-[8px] font-bold uppercase text-on-surface-variant flex items-center gap-0.5">
-              <StickyNote size={8} /> Annotation Notes:
-            </label>
-            <input
-              type="text"
-              placeholder="Add thoughts/reminders..."
-              value={noteInput}
-              onChange={(e) => setNoteInput(e.target.value)}
-              className="block w-full px-2 py-1 text-[10px] border border-outline-variant bg-surface text-foreground rounded-lg focus:outline-none"
-            />
-          </div>
-
-        </div>
-      )}
 
       {/* 5. FULL SCREEN THUMBNAIL GRID OVERLAY */}
       {showThumbnailGrid && (
