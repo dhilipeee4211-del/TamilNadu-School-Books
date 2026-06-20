@@ -423,7 +423,7 @@ const PageSlot: React.FC<PageSlotProps> = ({
     <div 
       id={`page-slot-${pageNum}`}
       ref={containerRef}
-      className="relative bg-white shadow-md mx-auto select-text border border-outline-variant/35"
+      className="relative bg-white shadow-md mx-auto select-text border border-outline-variant/35 flex-shrink-0"
       style={{
         width: `${pageWidth}px`,
         height: `${pageHeight}px`,
@@ -518,7 +518,7 @@ export default function ReaderPage() {
   const [pdfDoc, setPdfDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
-  const [zoomScale, setZoomScale] = useState(1.1);
+  const [zoomScale, setZoomScale] = useState(1.0);
   
   // UI Panels
   const [sidebarTab, setSidebarTab] = useState<'thumbnails' | 'search' | 'notes' | 'bookmarks'>('thumbnails');
