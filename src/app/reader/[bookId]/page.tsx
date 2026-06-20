@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { supabase } from '@/lib/supabase';
@@ -17,7 +17,6 @@ import {
   Loader2, 
   ArrowLeft,
   X,
-  MessageSquarePlus,
   BookmarkCheck,
   BookOpen,
   DownloadCloud,
@@ -28,8 +27,7 @@ import {
   Eraser,
   Moon,
   Sun,
-  Undo2,
-  Check
+  Undo2
 } from 'lucide-react';
 import * as pdfjs from 'pdfjs-dist';
 
@@ -538,7 +536,6 @@ export default function ReaderPage() {
   
   // UI Panels
   const [sidebarTab, setSidebarTab] = useState<'thumbnails' | 'search' | 'notes' | 'bookmarks'>('thumbnails');
-  const [showSettings, setShowSettings] = useState(false);
   const [showThumbnailGrid, setShowThumbnailGrid] = useState(false);
 
   // Active toolbar parameters
@@ -627,7 +624,7 @@ export default function ReaderPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool, currentPage, drawingHistory]);
+  }, [activeTool, currentPage, handleUndoDrawing]);
 
   const colors = [
     { name: 'Yellow', hex: '#fbbf24' },
@@ -1118,7 +1115,7 @@ export default function ReaderPage() {
   };
 
   // Save Pencil drawings to Database
-  const handleSaveDrawing = async (pageNum: number, strokes: Stroke[], isUndoAction = false) => {
+  const handleSaveDrawing = useCallback(async (pageNum: number, strokes: Stroke[], isUndoAction = false) => {
     if (!user || !book) return;
 
     // Save previous state to history stack if not an undo action itself
@@ -1160,9 +1157,9 @@ export default function ReaderPage() {
     } catch (err) {
       console.error('Failed to sync drawings:', err);
     }
-  };
+  }, [user, book, drawingsMap]);
 
-  const handleUndoDrawing = async (pageNum: number) => {
+  const handleUndoDrawing = useCallback(async (pageNum: number) => {
     const history = drawingHistory[pageNum] || [];
     if (history.length === 0) return;
 
@@ -1175,7 +1172,7 @@ export default function ReaderPage() {
     }));
 
     await handleSaveDrawing(pageNum, previousState, true);
-  };
+  }, [drawingHistory, handleSaveDrawing]);
 
   const handleClearDrawing = async (pageNum: number) => {
     if (!confirm(`Clear all pencil drawings on page ${pageNum}?`)) return;
